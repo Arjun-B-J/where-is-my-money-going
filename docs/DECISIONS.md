@@ -62,6 +62,13 @@ have exercised this inference at all.
 **Decision.** Classification calls pass a full JSON Schema, with `enum` on the
 category field, and disable the model's thinking channel.
 
+**One caveat if you copy this.** These two settings used to fight each other.
+Ollama deferred the schema's probability masking until it saw an end-of-thinking
+token, so `think=false` closed the thinking tags early and the constraint was
+silently dropped ([ollama#15260](https://github.com/ollama/ollama/issues/15260)).
+That is fixed, and the combination is verified working here on 0.23.1, but on an
+affected build you get plain text back and no error to tell you why.
+
 **Why — and this is the big one.** The default model, `gemma4:26b`, is a reasoning
 model. The first version of this app used Ollama's `format="json"`, which asks for
 syntactic JSON and nothing more. With thinking enabled, its content channel

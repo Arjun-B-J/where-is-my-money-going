@@ -50,8 +50,16 @@ Four ideas do most of the work.
 
 **Deterministic extraction, then the model.** Dates, amounts and balances come
 out of the PDFs with `pdfplumber` and regexes. The model is never asked to read a
-number, only to label a row that has already been extracted. There is no path by
-which a hallucination becomes a rupee figure.
+number off a statement, only to label a row that code has already extracted, so no
+figure on a statement can come from a hallucination.
+
+There is one deliberate exception, and it is worth naming rather than hiding. The
+receipt scanner hands a photograph to a vision model and stores the total it reads,
+because a photo has no machine-readable text to parse. Those rows are the only ones
+in the database whose amount came from a model. They record
+`tag_reason = "read from a receipt image by the vision model"`, carry the model's
+own confidence, and go to the review queue below 0.70. Nothing on a bank statement
+is treated that way.
 
 **Direction from the balance, not from keywords.** Text-extracted bank PDFs lose
 their column alignment, so you cannot tell a withdrawal from a deposit by which
@@ -117,9 +125,11 @@ A sample of the generated report, from the same data:
 ## Quickstart
 
 **Prerequisites.** Python 3.11+, Node 20+, [Ollama](https://ollama.com/), and
-about 18 GB of disk for the model. A GPU with 16 GB+ of VRAM makes categorising
-comfortable; on CPU it works but is slow enough that you will want to leave it
-running.
+about 18 GB of disk for the model. `gemma4:26b` is a mixture-of-experts model,
+26B parameters in total with roughly 4B active per token, and it loads into about
+20 GB at the default 32K context. So a 24 GB card holds it comfortably and a 16 GB
+one will spill to CPU. On CPU it works, but slowly enough that you will want to
+leave it running.
 
 ```bash
 git clone https://github.com/Arjun-B-J/where-is-my-money-going.git
