@@ -76,7 +76,7 @@ async def cmd_status(_args: argparse.Namespace) -> int:
         if not health["model_pulled"]:
             print(f"             run: ollama pull {settings.llm_model}")
     else:
-        print(f"  Status     unreachable — {health.get('error')}")
+        print(f"  Status     unreachable: {health.get('error')}")
         print("             start Ollama, then re-run this command")
 
     with SessionLocal() as db:
@@ -169,7 +169,7 @@ async def cmd_tag(_args: argparse.Namespace) -> int:
         print(f"  categorised    {state.get('llm_tagged', 0)}")
         print(f"  need review    {state.get('needs_review', 0)}")
         if state.get("llm_failed"):
-            print(f"  still untagged {state['llm_failed']} — the model was unreachable")
+            print(f"  still untagged {state['llm_failed']} (the model was unreachable)")
             return 1
     return 0
 
@@ -260,7 +260,7 @@ async def cmd_report(args: argparse.Namespace) -> int:
     from app.reports import render_spend_analysis
 
     output = Path(args.output or f"spend-analysis-{utc_now():%Y%m%d-%H%M}.pdf")
-    print("Generating the report — several model passes, expect a minute or two…")
+    print("Generating the report. Several model passes, expect a minute or two…")
     with SessionLocal() as db:
         pdf = await render_spend_analysis(db)
     output.write_bytes(pdf)
@@ -294,13 +294,13 @@ async def cmd_reset(args: argparse.Namespace) -> int:
 
 
 def _report_run(run: PipelineRun) -> None:
-    _heading(f"Run #{run.id} — {run.status}")
+    _heading(f"Run #{run.id}: {run.status}")
     print(f"  processed      {run.transactions_processed}")
     print(f"  rule-tagged    {run.rule_tagged}")
     print(f"  model-tagged   {run.llm_tagged}")
     print(f"  need review    {run.needs_review}")
     if not run.llm_available:
-        print(f"  UNTAGGED       {run.llm_failed} — the model was unreachable.")
+        print(f"  UNTAGGED       {run.llm_failed} (the model was unreachable)")
         print("                 Re-run `wimmg tag` once it is back.")
     if run.node_timings_ms:
         slowest = sorted(run.node_timings_ms.items(), key=lambda kv: -kv[1])
@@ -316,7 +316,7 @@ def _report_run(run: PipelineRun) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="wimmg",
-        description=f"{APP_NAME} — local-first spending analysis.",
+        description=f"{APP_NAME}: local-first spending analysis.",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     subparsers = parser.add_subparsers(dest="command", required=True)

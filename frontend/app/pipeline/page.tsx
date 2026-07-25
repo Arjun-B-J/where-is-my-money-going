@@ -189,7 +189,7 @@ export default function PipelinePage() {
               {runs.length === 0 && (
                 <tr>
                   <td colSpan={7} className="px-5 py-8 text-center text-muted-foreground">
-                    No runs yet — kick one off above.
+                    No runs yet. Kick one off above.
                   </td>
                 </tr>
               )}

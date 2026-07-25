@@ -48,7 +48,7 @@ export function InsightsList({ cards }: { cards: IC[] }) {
                     outage is visible rather than silently papered over. */}
                 {c.generated_by === "computed" && (
                   <p className="mt-1.5 text-[11px] uppercase tracking-wide text-muted-foreground/70">
-                    Computed from your figures — the local model was unavailable
+                    Computed from your figures. The local model was unavailable
                   </p>
                 )}
               </div>

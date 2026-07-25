@@ -94,7 +94,7 @@ export default function PeoplePage() {
 }
 
 function Empty() {
-  return <p className="text-sm text-muted-foreground">— nothing here</p>;
+  return <p className="text-sm text-muted-foreground">nothing here yet</p>;
 }
 
 function PersonRow({ p, i, positive }: { p: PersonBalance; i: number; positive: boolean | null }) {

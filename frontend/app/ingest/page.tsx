@@ -102,7 +102,7 @@ export default function IngestPage() {
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Drop bank or credit-card statements. Files are
-            parsed locally — they never leave your machine.
+            parsed locally and never leave your machine.
           </p>
         </div>
         <Badge tone="good">Local-first · gitignored</Badge>
@@ -211,7 +211,7 @@ export default function IngestPage() {
               with the running balance for direction inference.
             </Step>
             <Step n={2} title="Dedup">
-              Each row gets a deterministic <code className="text-xs">external_id</code> —
+              Each row gets a deterministic <code className="text-xs">external_id</code>, so
               files with overlapping date ranges are safely re-ingested.
             </Step>
             <Step n={3} title="Tag">
@@ -226,7 +226,7 @@ export default function IngestPage() {
               to review.
             </Step>
             <Step n={6} title="Persist">
-              SQLite at <code className="text-xs">backend/storage/wimmg.db</code> —
+              SQLite at <code className="text-xs">backend/storage/wimmg.db</code>, which is
               gitignored.
             </Step>
           </CardContent>

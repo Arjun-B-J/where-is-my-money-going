@@ -57,7 +57,7 @@ export default function DashboardPage() {
           <h3 className="font-semibold">Couldn&apos;t load dashboard</h3>
           <p className="mt-1 text-sm">{err}</p>
           <p className="mt-3 text-xs text-red-600">
-            Load some data first — open the home page and choose <strong>See it on demo data</strong>.
+            Load some data first. Open the home page and choose <strong>See it on demo data</strong>.
           </p>
         </div>
       </Shell>

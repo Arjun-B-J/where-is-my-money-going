@@ -49,7 +49,7 @@ export default function ReceiptPage() {
         <p className="text-sm text-muted-foreground">
           Drop a photo of a receipt. The local vision model reads the merchant, total and
           date, and files it as a transaction. Unlike statement parsing, this step has
-          no deterministic fallback — it either reads the image or tells you it could not.
+          no deterministic fallback: it either reads the image or tells you it could not.
         </p>
       </div>
 

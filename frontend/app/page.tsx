@@ -25,7 +25,7 @@ const CAPABILITIES = [
     title: "Statements parsed, not guessed",
     body:
       "Dates, amounts and balances come out of your PDFs by regex and arithmetic. " +
-      "The model never sees a number it could get wrong — it only labels rows that " +
+      "The model never sees a number it could get wrong. It only labels rows that " +
       "have already been extracted.",
   },
   {
@@ -48,9 +48,9 @@ const CAPABILITIES = [
     icon: ScanLine,
     title: "Catches what a chart hides",
     body:
-      "Duplicate charges, instalment plans you forgot converting, subscriptions " +
-      "that quietly renew, refunds that never arrived. All deterministic checks, " +
-      "all explainable.",
+      "Duplicate charges, subscriptions that quietly renew, refunds that never " +
+      "arrived, instalment plans still running, card bills counted twice. All " +
+      "deterministic checks, all explainable.",
   },
 ];
 
@@ -119,10 +119,12 @@ export default function Landing() {
             transition={{ duration: 0.55, delay: 0.12 }}
             className="mt-5 max-w-xl text-lg leading-relaxed text-ink-muted"
           >
-            I could never answer that from a bank statement. Twelve months of UPI
-            transfers to people whose names mean nothing six weeks later, and no
-            spreadsheet was going to fix it. So this reads the statements, labels
-            every row, and tells you what the pattern actually is.
+            I could never work it out from a bank statement. A year of statements
+            is mostly UPI rows, and a UPI row gives you a name and nothing else.
+            Six weeks later I had no idea who half of them were. Every app that
+            promised to sort it out wanted the whole statement on their server
+            first, so I built one that reads the statements here, labels every
+            row, and tells me what the pattern actually is.
           </motion.p>
 
           <motion.div
@@ -192,7 +194,7 @@ export default function Landing() {
           )}
           {run && (
             <p className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm text-emerald-800">
-              Run #{run.id} finished — {run.transactions_processed} transactions. Opening the dashboard…
+              Run #{run.id} finished. {run.transactions_processed} transactions. Opening the dashboard…
             </p>
           )}
         </div>
@@ -237,8 +239,9 @@ export default function Landing() {
           <p className="mt-3 max-w-3xl text-sm leading-relaxed text-ink-muted">
             A LangGraph pipeline does the work: parse or generate, store with a
             deterministic id so re-ingesting a statement is a no-op, categorise with
-            a local model under schema-constrained decoding, then two agents refine —
-            one finds people, one re-checks the tags the first pass was unsure about.
+            a local model under schema-constrained decoding, then two agents refine it.
+            One finds people, the other re-checks the tags the first pass was unsure
+            about.
             FastAPI and SQLite behind it, Next.js in front, and one PDF report at the
             end.
           </p>
