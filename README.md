@@ -292,7 +292,7 @@ frontend/
 make check     # lint, types and tests for both sides; same gates as CI
 ```
 
-138 backend tests and 10 frontend tests at the time of writing. The suite runs
+158 backend tests and 10 frontend tests at the time of writing. The suite runs
 without Ollama on purpose: it uses a fake model that can be put into a failure
 state, so the "model unavailable" and "model returned garbage" paths are covered
 rather than skipped. `tests/test_llm_contract.py` and
