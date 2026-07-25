@@ -1,0 +1,92 @@
+[project]
+name = "where-is-my-money-going"
+version = "0.5.0"
+description = "Local-first spending analysis for Indian bank and credit-card statements"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+# Kept deliberately short. faker, rich, alembic, openpyxl and langchain-core were
+# all declared but never imported. Unused dependencies are supply-chain surface
+# and slow every install down for nothing.
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+    "sqlalchemy>=2.0.36",
+    "langgraph>=0.2.50",
+    "httpx>=0.27.0",
+    "python-multipart>=0.0.12",   # multipart parsing for uploads
+    "pdfplumber>=0.11.0",         # statement text extraction
+    "reportlab>=4.5.0",           # PDF generation
+    "matplotlib>=3.10.0",         # charts inside the PDF
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=5.0.0",
+    "ruff>=0.7.0",
+    "mypy>=1.13.0",
+]
+
+[project.scripts]
+wimmg = "app.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "I",    # import sorting
+    "N",    # naming
+    "B",    # bugbear
+    "UP",   # pyupgrade
+    "W",    # warnings
+    "C4",   # comprehensions
+    "SIM",  # simplification
+    "RUF",  # ruff-specific
+]
+ignore = [
+    "E501",  # line length is the formatter's job
+    "B008",  # FastAPI's Depends()/File() must be called in argument defaults
+]
+
+# Characters this project uses on purpose. The rupee sign appears in every
+# user-facing string; the rest are typography in PDF output and maths notation
+# in docstrings ("2σ from the mean").
+allowed-confusables = ["₹", "–", "—", "×", "σ", "∪", "≤", "≥", "→"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers --strict-config"
+# Warnings are errors so a deprecation surfaces as a failure instead of a wall of
+# output. datetime.utcnow() used to emit 64,000 warnings per run, which is the
+# same as emitting none.
+filterwarnings = [
+    "error::DeprecationWarning",
+    "ignore::DeprecationWarning:pdfplumber.*",
+    "ignore::DeprecationWarning:pdfminer.*",
+]
+
+[tool.mypy]
+# Deliberately no `python_version` pin. Pinning it to 3.11 while mypy runs under a
+# newer interpreter makes mypy parse that interpreter's own dependency stubs with
+# 3.11 rules, and it rejects them — numpy's stubs use a `type` statement, so CI
+# failed on numpy rather than on this project. Without the pin, mypy checks
+# against whatever it is running on, and the CI matrix covers the range that
+# `requires-python` actually promises.
+ignore_missing_imports = true
+warn_unused_ignores = true

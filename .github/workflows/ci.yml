@@ -1,0 +1,119 @@
+name: CI
+
+# This lives in .github/workflows/ so it actually runs. A previous version was
+# parked in .github/workflow-templates/, where GitHub ignores it — the README
+# still carried a "tests passing" badge that nothing was checking.
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # Both ends of the range pyproject's `requires-python` promises. The lower
+      # bound is the one that catches accidental use of newer syntax.
+      matrix:
+        python-version: ["3.11", "3.12"]
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check app tests
+
+      - name: Type check
+        run: mypy app
+
+      # No Ollama in CI, and that is the point: the suite uses a fake model that
+      # can be put into a failure state, so the "model unavailable" paths are
+      # covered rather than skipped.
+      - name: Test
+        run: pytest -q --cov=app --cov-report=term-missing
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        run: npm ci --no-fund --no-audit
+
+      - name: Lint
+        run: npx eslint .
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  privacy:
+    # Fails if personal data or an employer identifier reappears in source.
+    # The reason this job exists is in docs/PRIVACY.md.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Privacy checks
+        run: pytest tests/test_privacy.py -q
+
+      - name: No data files committed
+        working-directory: .
+        run: |
+          set -uo pipefail
+          # docs/sample-report.pdf is the one allowed data-shaped file: it is
+          # generated from the synthetic dataset, and test_privacy.py asserts so.
+          offenders=$(git ls-files \
+            | grep -iE '\.(pdf|csv|xlsx?|db|sqlite3?)$' \
+            | grep -v '^docs/sample-report\.pdf$' || true)
+          if [ -n "$offenders" ]; then
+            echo "::error::Data files are tracked in git. See docs/PRIVACY.md."
+            echo "$offenders"
+            exit 1
+          fi
+          echo "No statement or database files are tracked."

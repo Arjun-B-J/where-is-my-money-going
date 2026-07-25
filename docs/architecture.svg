@@ -1,0 +1,168 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 700" width="1180" height="700" font-family="Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-serif" role="img" aria-labelledby="title desc">
+  <title id="title">Where Is My Money Going? — architecture</title>
+  <desc id="desc">Statements and synthetic data are parsed deterministically into a shared record type and stored in SQLite. A LangGraph pipeline then categorises rows with a local model and refines them with two agents. Analytics, a PDF report, the API and the frontend all read from the database. The only network egress is to Ollama on localhost.</desc>
+
+  <defs>
+    <style>
+      .bg        { fill: #FFFBF5; }
+      .panel     { fill: #ffffff; stroke: #FED7AA; stroke-width: 1.5; }
+      .panel-det { fill: #ffffff; stroke: #CBD5E1; stroke-width: 1.5; }
+      .panel-llm { fill: #FFF7ED; stroke: #EA580C; stroke-width: 1.75; }
+      .store     { fill: #0F172A; }
+      .band      { fill: #F8FAFC; stroke: #E2E8F0; stroke-width: 1; }
+      .h    { fill: #0F172A; font-size: 15px; font-weight: 650; }
+      .hw   { fill: #ffffff; font-size: 15px; font-weight: 650; }
+      .b    { fill: #475569; font-size: 12.5px; }
+      .bw   { fill: #CBD5E1; font-size: 12.5px; }
+      .mono { font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; fill: #64748B; }
+      .monow{ font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; fill: #CBD5E1; }
+      .tag  { font-size: 10.5px; font-weight: 650; letter-spacing: .06em; fill: #EA580C; }
+      /* Cream halo around band and edge labels, drawn under the glyphs, so a
+         connector passing behind text stays legible without hand-routing every
+         line around every caption. */
+      .sect, .elabel { paint-order: stroke; stroke: #FFFBF5; stroke-width: 4px; stroke-linejoin: round; }
+      .sect { fill: #94A3B8; font-size: 10.5px; font-weight: 650; letter-spacing: .12em; }
+      .note { fill: #9A3412; font-size: 12px; font-style: italic; }
+      .edge   { stroke: #94A3B8; stroke-width: 1.75; fill: none; marker-end: url(#a-grey); }
+      .edge-a { stroke: #EA580C; stroke-width: 2;    fill: none; marker-end: url(#a-amber); }
+      .edge-d { stroke: #94A3B8; stroke-width: 1.5;  fill: none; stroke-dasharray: 5 4; marker-end: url(#a-grey); }
+      .edge-l { stroke: #EA580C; stroke-width: 1.75; fill: none; stroke-dasharray: 6 4; marker-end: url(#a-amber); }
+      .elabel { fill: #64748B; font-size: 11px; }
+    </style>
+    <marker id="a-grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#94A3B8"/>
+    </marker>
+    <marker id="a-amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#EA580C"/>
+    </marker>
+  </defs>
+
+  <rect class="bg" width="1180" height="700"/>
+
+  <!-- ============ row 1: inputs → extraction → store ============ -->
+  <text class="sect" x="40" y="40">INPUTS</text>
+  <text class="sect" x="300" y="40">EXTRACTION · NO MODEL RUNS HERE</text>
+  <text class="sect" x="640" y="40">STORE</text>
+
+  <rect class="panel-det" x="40" y="56" width="196" height="70" rx="12"/>
+  <text class="h"    x="58" y="83">Your statements</text>
+  <text class="mono" x="58" y="104">PDF · CSV</text>
+  <text class="b"    x="58" y="119">content-sniffed, any name</text>
+
+  <rect class="panel-det" x="40" y="146" width="196" height="70" rx="12"/>
+  <text class="h"    x="58" y="173">Synthetic dataset</text>
+  <text class="mono" x="58" y="194">demo/generator.py</text>
+  <text class="b"    x="58" y="209">fictional throughout</text>
+
+  <rect class="panel-det" x="300" y="56" width="244" height="160" rx="12"/>
+  <text class="h" x="318" y="83">ingest/</text>
+  <text class="b" x="318" y="106">parsers</text><text class="mono" x="404" y="106">→ one per format</text>
+  <text class="b" x="318" y="126">normalize</text><text class="mono" x="404" y="126">→ payee cleanup</text>
+  <text class="b" x="318" y="146">records</text><text class="mono" x="404" y="146">→ ParsedTxn</text>
+  <text class="b" x="318" y="166">loader</text><text class="mono" x="404" y="166">→ batched dedupe</text>
+  <line x1="318" y1="180" x2="526" y2="180" stroke="#E2E8F0"/>
+  <text class="note" x="318" y="199">amounts and dates never reach a model</text>
+
+  <rect class="store" x="640" y="56" width="200" height="160" rx="12"/>
+  <text class="hw" x="660" y="83">SQLite</text>
+  <text class="bw" x="660" y="106">transactions · people</text>
+  <text class="bw" x="660" y="126">categories · rules</text>
+  <text class="bw" x="660" y="146">payee notes</text>
+  <text class="bw" x="660" y="166">pipeline_runs</text>
+  <line x1="660" y1="180" x2="820" y2="180" stroke="#334155"/>
+  <text class="monow" x="660" y="199">re-ingest is a no-op</text>
+
+  <path class="edge" d="M 236 91 L 292 108"/>
+  <path class="edge" d="M 236 181 L 292 164"/>
+  <path class="edge" d="M 544 136 L 632 136"/>
+
+  <!-- ============ row 2: pipeline ============ -->
+  <text class="sect" x="40" y="288">PIPELINE · LangGraph, one run per ingest</text>
+
+  <rect class="panel-det" x="40" y="304" width="140" height="64" rx="10"/>
+  <text class="h" x="56" y="330">rule_tag</text>
+  <text class="b" x="56" y="350">regex, from the DB</text>
+
+  <rect class="panel-llm" x="204" y="304" width="196" height="64" rx="10"/>
+  <text class="tag" x="220" y="324">LOCAL MODEL</text>
+  <text class="h"   x="220" y="344">llm_tag</text>
+  <text class="b"   x="220" y="361">schema-constrained JSON</text>
+
+  <rect class="panel-det" x="424" y="304" width="168" height="64" rx="10"/>
+  <text class="h" x="440" y="330">friend_discover</text>
+  <text class="b" x="440" y="350">two-way flow → person</text>
+
+  <rect class="panel-llm" x="616" y="304" width="176" height="64" rx="10"/>
+  <text class="tag" x="632" y="324">LOCAL MODEL</text>
+  <text class="h"   x="632" y="344">validator</text>
+  <text class="b"   x="632" y="361">second opinion</text>
+
+  <rect class="panel-det" x="816" y="304" width="150" height="64" rx="10"/>
+  <text class="h" x="832" y="330">finalize</text>
+  <text class="b" x="832" y="350">audit record</text>
+
+  <!-- store → pipeline -->
+  <path class="edge" d="M 700 216 L 700 250 L 20 250 L 20 336 L 32 336"/>
+  <text class="elabel" x="330" y="243">new rows</text>
+
+  <!-- pipeline chain -->
+  <path class="edge"   d="M 180 336 L 196 336"/>
+  <path class="edge-a" d="M 400 336 L 416 336"/>
+  <path class="edge"   d="M 592 336 L 608 336"/>
+  <path class="edge-a" d="M 792 336 L 808 336"/>
+
+  <!-- finalize → back to the store, routed around the right edge -->
+  <path class="edge-d" d="M 966 322 L 1000 322 L 1000 136 L 848 136"/>
+  <text class="elabel" x="1044" y="300">writes</text>
+  <text class="elabel" x="1044" y="316">back</text>
+
+  <!-- honesty callout -->
+  <rect x="204" y="392" width="588" height="50" rx="10" fill="#FFF7ED" stroke="#FED7AA" stroke-width="1.25"/>
+  <text class="note" x="222" y="414">Model unreachable? No tag is written. Category stays NULL, the row goes to</text>
+  <text class="note" x="222" y="432">review, and the run records llm_available = false.</text>
+
+  <!-- ============ row 3: outputs ============ -->
+  <text class="sect" x="40" y="506">READ FROM THE STORE</text>
+
+  <rect class="panel" x="40" y="538" width="222" height="104" rx="12"/>
+  <text class="h" x="58" y="565">services/</text>
+  <text class="b" x="58" y="587">analytics · trends · budgets</text>
+  <text class="b" x="58" y="607">subscriptions · instalments</text>
+  <text class="b" x="58" y="627">anomalies · reconciliation</text>
+
+  <rect class="panel" x="286" y="538" width="222" height="104" rx="12"/>
+  <text class="h" x="304" y="565">reports/</text>
+  <text class="b" x="304" y="587">theme · charts · labels</text>
+  <text class="b" x="304" y="607">narrative (model prose)</text>
+  <text class="b" x="304" y="627">Spend Analysis PDF</text>
+
+  <rect class="panel" x="532" y="538" width="208" height="104" rx="12"/>
+  <text class="h" x="550" y="565">routes/</text>
+  <text class="b" x="550" y="587">FastAPI, one router</text>
+  <text class="b" x="550" y="607">per domain</text>
+  <text class="mono" x="550" y="628">/docs</text>
+
+  <rect class="panel" x="764" y="538" width="208" height="104" rx="12"/>
+  <text class="h" x="782" y="565">frontend/</text>
+  <text class="b" x="782" y="587">Next.js 15, typed client</text>
+  <text class="b" x="782" y="607">proxied, one origin</text>
+  <text class="mono" x="782" y="628">/api/backend/*</text>
+
+  <!-- store → outputs: one trunk, then short branches, so the row stays readable -->
+  <path class="edge" d="M 740 216 L 740 236 L 1030 236 L 1030 478 L 230 478 L 230 530"/>
+  <path class="edge" d="M 397 478 L 397 530"/>
+  <path class="edge" d="M 636 478 L 636 530"/>
+  <path class="edge" d="M 740 590 L 756 590"/>
+
+  <!-- ============ the only egress ============ -->
+  <rect class="store" x="1000" y="538" width="140" height="104" rx="12"/>
+  <text class="hw" x="1018" y="565" font-size="14">Ollama</text>
+  <text class="monow" x="1018" y="588">localhost:11434</text>
+  <text class="bw" x="1018" y="610" font-style="italic">the only network</text>
+  <text class="bw" x="1018" y="626" font-style="italic">call this app makes</text>
+
+  <!-- model boxes → Ollama, routed below the pipeline row -->
+  <path class="edge-l" d="M 302 368 L 302 452 L 1070 452 L 1070 530"/>
+  <path class="edge-l" d="M 704 368 L 704 452"/>
+  <text class="elabel" x="856" y="446" fill="#9A3412">one transaction per call</text>
+</svg>

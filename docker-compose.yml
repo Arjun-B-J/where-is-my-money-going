@@ -1,0 +1,41 @@
+# Ollama stays on the host rather than in a container: it needs the GPU, and
+# passing one through Docker is platform-specific enough that it would be the
+# main thing you debug instead of the app. The backend reaches it through
+# Docker's host gateway.
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      LLM_HOST: http://host.docker.internal:11434
+      LLM_MODEL: gemma4:26b
+      DATABASE_URL: sqlite:////data/wimmg.db
+      CORS_ORIGINS: http://localhost:3000
+    volumes:
+      # A named volume, not a bind mount: the database holds your financial
+      # history and should not land in the repository directory.
+      - wimmg-data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      # Server-side rewrites run inside the compose network, so this is the
+      # service name rather than localhost.
+      NEXT_PUBLIC_API_URL: http://backend:8000
+    depends_on:
+      backend:
+        condition: service_started
+
+volumes:
+  wimmg-data:

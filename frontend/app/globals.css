@@ -1,0 +1,93 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 30 100% 98%;
+    --foreground: 24 30% 14%;
+    --card: 0 0% 100%;
+    --card-foreground: 24 30% 14%;
+    --primary: 25 95% 53%;
+    --primary-foreground: 30 100% 98%;
+    --muted: 30 50% 95%;
+    --muted-foreground: 25 12% 35%;
+    --accent: 30 80% 92%;
+    --accent-foreground: 24 30% 14%;
+    --border: 30 30% 90%;
+    --ring: 25 95% 53%;
+    --radius: 0.75rem;
+  }
+
+  .dark {
+    --background: 24 25% 8%;
+    --foreground: 30 30% 95%;
+    --card: 24 25% 12%;
+    --card-foreground: 30 30% 95%;
+    --primary: 25 95% 60%;
+    --primary-foreground: 24 25% 8%;
+    --muted: 24 15% 18%;
+    --muted-foreground: 30 15% 65%;
+    --accent: 24 20% 22%;
+    --accent-foreground: 30 30% 95%;
+    --border: 24 15% 22%;
+    --ring: 25 95% 60%;
+  }
+
+  * {
+    border-color: hsl(var(--border));
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+/* Subtle grain texture for premium feel */
+.grain {
+  position: relative;
+}
+.grain::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85'/%3E%3CfeColorMatrix values='0 0 0 0 0.5 0 0 0 0 0.4 0 0 0 0 0.3 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E");
+  opacity: 0.4;
+  pointer-events: none;
+  mix-blend-mode: multiply;
+}
+
+/* Glow effect for primary CTAs */
+.glow {
+  box-shadow:
+    0 0 0 1px rgb(251 146 60 / 0.2),
+    0 8px 32px -8px rgb(251 146 60 / 0.4),
+    0 4px 12px -4px rgb(234 88 12 / 0.2);
+}
+
+/* Card hover lift */
+.lift {
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+}
+.lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 32px -12px rgb(234 88 12 / 0.18);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--ring));
+}

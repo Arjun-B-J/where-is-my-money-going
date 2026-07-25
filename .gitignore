@@ -1,0 +1,93 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv/
+env/
+ENV/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.coverage.*
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+next-env.d.ts
+.swc/
+
+# ---------------------------------------------------------------------------
+# Data. Nothing derived from a real statement belongs in this repository.
+# See docs/PRIVACY.md — this list is the second line of defence, not the first;
+# CI also fails if any data file becomes tracked.
+# ---------------------------------------------------------------------------
+
+# Wherever statements get dropped.
+/statements/
+/data/
+Documents/
+documents/
+uploads/
+
+# Statement and export formats.
+*.pdf
+*.csv
+*.xlsx
+*.xls
+*.CSV
+
+# The database is your entire financial history in one file.
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+storage/
+backend/storage/
+
+# Generated report output.
+ingest_out/
+*_extracted.json
+*_extracted.csv
+
+# One deliberate exception: a sample report built from the synthetic dataset, so
+# the README can show what the output looks like. `tests/test_privacy.py` asserts
+# it contains only synthetic payees.
+!docs/sample-report.pdf
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Playwright
+test-results/
+playwright-report/
+playwright/.cache/
+
+# Misc
+.cache/
+*.bak
