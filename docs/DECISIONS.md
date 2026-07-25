@@ -156,7 +156,7 @@ for window in (4, 6, 8):
 
 Every English paragraph of a few hundred characters trips that on `" the"` and
 `"tion"`. The gate rejected **all** valid prose, so the report's model-written
-narrative was discarded 100% of the time and a deterministic fallback shipped on
+narrative was discarded 100% of the time and a deterministic fallback was used on
 every run. Nothing looked broken, because the fallback read reasonably well.
 
 Two lessons, both encoded in the code now. A gate that can reject good output is

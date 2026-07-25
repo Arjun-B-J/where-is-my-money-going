@@ -228,7 +228,7 @@ success hides the bug that caused it**. The client now returns an explicit
 for degenerate output by counting repeated 4-character windows and rejecting
 anything appearing 8 or more times. Every English paragraph does that with
 `" the"` and `"tion"`, so the gate rejected *all* valid prose and a deterministic
-fallback shipped every single time. Because the fallback was decent, nothing
+fallback was used every single time. Because the fallback was decent, nothing
 looked broken. The check is now word-level, and the test that would have caught
 it asserts that a known-good paragraph passes.
 
