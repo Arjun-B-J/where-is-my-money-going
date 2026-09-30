@@ -30,7 +30,11 @@ _REAL_VPA = re.compile(
 
 
 def _source_files() -> list[Path]:
-    return [p for p in SOURCE_ROOT.rglob("*.py") if "__pycache__" not in p.parts]
+    """Source, plus the labelled eval data, which ships inside the package."""
+    return [
+        p for p in SOURCE_ROOT.rglob("*")
+        if p.suffix in {".py", ".jsonl"} and "__pycache__" not in p.parts
+    ]
 
 
 def test_no_phone_numbers_in_source():

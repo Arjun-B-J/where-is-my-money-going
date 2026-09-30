@@ -56,6 +56,9 @@ backend/storage/
 
 # Generated report output.
 ingest_out/
+
+# Scratch eval runs. The ones worth keeping are summarised in docs/EVALS.md.
+eval_results/
 *_extracted.json
 *_extracted.csv
 
