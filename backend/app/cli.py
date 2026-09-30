@@ -14,6 +14,9 @@ for whoever ran the script.
     wimmg patterns                  # print what the detectors found
     wimmg report -o out.pdf         # write the Spend Analysis PDF
     wimmg reset                     # delete transactions and run history
+    wimmg eval                      # score the categoriser against labelled data
+    wimmg eval-chat                 # check chat answers against computed figures
+    wimmg mcp                       # serve the read-only query tools over MCP (stdio)
 
 `finalize_demo_state.py` has no replacement on purpose. It marked untagged rows
 as model-tagged with zero confidence and wrote invented node timings onto a run
@@ -293,6 +296,230 @@ async def cmd_reset(args: argparse.Namespace) -> int:
     return 0
 
 
+async def cmd_eval(args: argparse.Namespace) -> int:
+    """Score one or more arms and models against the labelled set.
+
+    Reads nothing from the user's database and writes nothing to it. Each run is
+    saved as JSON under `--out`, with every prediction, so a number in a table
+    can always be traced to the rows behind it.
+    """
+    from app.evals.dataset import (
+        GOLDEN_PATH,
+        PERSONAL_PATH,
+        PERSONAL_SLICES,
+        SLICES,
+        dataset_fingerprint,
+        load_golden,
+        load_personal,
+    )
+    from app.evals.metrics import score
+    from app.evals.report import build_record, comparison_table, save_record, slice_table
+    from app.evals.runner import EvalAbortedError, run_arm
+    from app.llm.client import LLMClient
+
+    settings = get_settings()
+    slices: tuple[str, ...]
+    if args.suite == "personal":
+        # Learning from corrections: history rows stand in for your own labels.
+        history, rows = load_personal()
+        dataset_path, slices = PERSONAL_PATH, PERSONAL_SLICES
+        default_arms = ["lookup", "llm", "llm+memory"]
+    else:
+        history, rows = [], load_golden()
+        dataset_path, slices = GOLDEN_PATH, SLICES
+        default_arms = ["llm"]
+    if args.slice:
+        rows = [row for row in rows if row.slice in args.slice]
+    if args.limit:
+        rows = rows[:args.limit]
+    if not rows:
+        print("No rows selected.", file=sys.stderr)
+        return 1
+
+    models = args.model or [settings.llm_model]
+    plan: list[tuple[str, str | None]] = []
+    for arm in args.arm or default_arms:
+        no_model = arm in ("rules", "lookup")
+        plan.extend([(arm, None)] if no_model else [(arm, model) for model in models])
+
+    records: list[dict] = []
+    for arm, model in plan:
+        print(f"Scoring {len(rows)} rows: {arm} / {model or 'no model'}…")
+        try:
+            result = await run_arm(
+                rows, arm=arm,
+                llm=LLMClient(model=model) if model else None,
+                concurrency=args.concurrency,
+                history=history,
+            )
+        except (EvalAbortedError, ValueError) as e:
+            print(f"  skipped: {e}", file=sys.stderr)
+            continue
+        scores = score(result.predictions, threshold=settings.confidence_threshold)
+        record = build_record(
+            result, scores, dataset=dataset_path.name,
+            fingerprint=dataset_fingerprint(dataset_path),
+        )
+        path = save_record(record, Path(args.out))
+        print(f"  accuracy {scores['accuracy'] * 100:.1f}%, wrote {path}")
+        records.append(record)
+
+    if not records:
+        return 1
+    _heading("Comparison")
+    print(comparison_table(records))
+    _heading("Accuracy by slice")
+    print(slice_table(records, slices))
+    return 0
+
+
+async def cmd_eval_chat(args: argparse.Namespace) -> int:
+    """Ask the chat questions and check each answer against a computed figure.
+
+    Builds its own throwaway database from the synthetic generator, so it reads
+    nothing from the user's database and writes nothing to it. Each run is saved
+    as JSON under `--out` with every question, answer and tool trace.
+    """
+    from app.evals.chat import (
+        build_chat_record,
+        chat_scores,
+        chat_table,
+        load_questions,
+        run_chat_eval,
+        save_chat_record,
+    )
+    from app.evals.runner import EvalAbortedError
+    from app.llm.client import LLMClient
+
+    questions = load_questions()
+    if args.limit:
+        questions = questions[:args.limit]
+    if not questions:
+        print("No questions selected.", file=sys.stderr)
+        return 1
+
+    model = args.model or get_settings().llm_model
+    records: list[dict] = []
+    for arm in args.arm or ["agent"]:
+        print(f"Asking {len(questions)} questions: {arm} / {model}…")
+        try:
+            result = await run_chat_eval(questions, arm=arm, llm=LLMClient(model=model))
+        except EvalAbortedError as e:
+            print(f"  skipped: {e}", file=sys.stderr)
+            continue
+        scores = chat_scores(result.answers)
+        record = build_chat_record(result, scores)
+        path = save_chat_record(record, Path(args.out))
+        print(f"  accuracy {scores['accuracy'] * 100:.1f}%, "
+              f"{scores['failures']} unanswered, wrote {path}")
+        records.append(record)
+
+    if not records:
+        return 1
+    _heading("Chat comparison")
+    print(chat_table(records))
+    return 0
+
+
+async def cmd_eval_summary(args: argparse.Namespace) -> int:
+    """Render saved run records as the markdown tables in docs/EVALS.md.
+
+    The tables in the docs are generated from the run files, never typed: a number
+    in EVALS.md can always be traced to the JSON record, and from there to every
+    prediction behind it.
+    """
+    import json
+
+    from app.evals.chat import chat_table
+    from app.evals.dataset import GOLDEN_PATH, PERSONAL_PATH, PERSONAL_SLICES, SLICES
+    from app.evals.report import comparison_table, slice_table
+
+    records = [json.loads(Path(p).read_text(encoding="utf-8")) for p in args.records]
+    glance = _glance_table(records, GOLDEN_PATH.name, PERSONAL_PATH.name)
+    if glance:
+        print("\n### Models at a glance\n")
+        print(glance)
+    groups = {
+        "Categorising: labelled stress set": [r for r in records if r.get("dataset") == GOLDEN_PATH.name],
+        "Learning from corrections: personal payees": [
+            r for r in records if r.get("dataset") == PERSONAL_PATH.name],
+        "Chat: questions with computed answers": [r for r in records if r.get("suite") == "chat"],
+    }
+    for title, members in groups.items():
+        if not members:
+            continue
+        print(f"\n### {title}\n")
+        if title.startswith("Chat"):
+            print(chat_table(members))
+        else:
+            print(comparison_table(members))
+            print()
+            print(slice_table(members, PERSONAL_SLICES if "personal" in title else SLICES))
+        print("\nRuns:")
+        for r in members:
+            meta = r.get("meta") or {}
+            print(f"- {r['arm']} / {r.get('model') or 'no model'}: run {r['run_at']}, dataset "
+                  f"{r.get('dataset')} sha1 {r.get('dataset_sha1')}, model digest "
+                  f"{meta.get('digest', 'n/a')}, Ollama {meta.get('ollama_version', 'n/a')}")
+    return 0
+
+
+def _glance_table(records: list[dict], golden: str, personal: str) -> str:
+    """One row per model across all three suites, from the same records as the detail.
+
+    Headline cells only: accuracy on the labelled set with the model alone, how much of
+    what clears the review threshold is right, per-call latency, the memory suite with
+    and without corrections, and the chat agent. Empty when fewer than two models ran.
+    """
+    def find(dataset: str | None, arm: str, model: str, suite: str | None = None) -> dict | None:
+        for r in records:
+            if r.get("model") == model and r["arm"] == arm and (
+                r.get("dataset") == dataset if suite is None else r.get("suite") == suite
+            ):
+                return r
+        return None
+
+    def pct(value: float | None) -> str:
+        return "n/a" if value is None else f"{value * 100:.1f}%"
+
+    models = sorted({r["model"] for r in records if r.get("model")})
+    if len(models) < 2:
+        return ""
+    lines = [
+        "| Model | Categorising | Auto-accepted rows correct (share of rows) | Median call "
+        "| Rows/min | Memory: without, with | Chat agent |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for model in models:
+        cat = find(golden, "llm", model)
+        alone, with_memory = find(personal, "llm", model), find(personal, "llm+memory", model)
+        chat = find(None, "agent", model, suite="chat")
+        s = cat["scores"] if cat else {}
+        latency = s.get("latency_ms_p50")
+        lines.append(
+            f"| {model} | {pct(s.get('accuracy'))} "
+            f"| {pct(s.get('auto_accept_precision'))} ({pct(s.get('auto_accept_coverage'))}) "
+            f"| {'n/a' if latency is None else f'{latency / 1000:.2f}s'} "
+            f"| {cat.get('rows_per_minute') if cat else 'n/a'} "
+            f"| {pct(alone['scores']['accuracy']) if alone else 'n/a'}, "
+            f"{pct(with_memory['scores']['accuracy']) if with_memory else 'n/a'} "
+            f"| {pct(chat['scores']['accuracy']) if chat else 'n/a'} |"
+        )
+    return "\n".join(lines)
+
+
+async def cmd_mcp(_args: argparse.Namespace) -> int:
+    """Serve the chat agent's read-only tools to an MCP client over stdio.
+
+    Blocks until the client closes stdin. Nothing else may print to stdout while
+    it runs: stdout is the protocol channel, and logging already goes to stderr.
+    """
+    from app.mcp_server import serve
+
+    serve()
+    return 0
+
+
 def _report_run(run: PipelineRun) -> None:
     _heading(f"Run #{run.id}: {run.status}")
     print(f"  processed      {run.transactions_processed}")
@@ -346,6 +573,46 @@ def build_parser() -> argparse.ArgumentParser:
                        help="also drop rules, categories, notes and people")
     reset.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
 
+    from app.evals.dataset import PERSONAL_SLICES, SLICES
+    from app.evals.runner import ARMS
+
+    evaluate = subparsers.add_parser(
+        "eval", help="score the categoriser against the labelled set"
+    )
+    evaluate.add_argument("--suite", choices=("golden", "personal"), default="golden",
+                          help="golden: the labelled stress set; personal: learning "
+                               "from your corrections")
+    evaluate.add_argument("--arm", action="append", choices=ARMS,
+                          help="repeat for several (default: llm, or lookup + llm + "
+                               "llm+memory for the personal suite)")
+    evaluate.add_argument("--model", action="append",
+                          help="model tag; repeat to compare several (default: LLM_MODEL)")
+    evaluate.add_argument("--concurrency", type=int, default=get_settings().llm_concurrency)
+    evaluate.add_argument("--slice", action="append", choices=SLICES + PERSONAL_SLICES,
+                          help="only rows from this slice; repeatable")
+    evaluate.add_argument("--limit", type=int, help="only the first N rows")
+    evaluate.add_argument("--out", default="eval_results", help="where to write run records")
+
+    from app.evals.chat import CHAT_ARMS
+
+    chat_eval = subparsers.add_parser(
+        "eval-chat", help="check chat answers against figures computed from the data"
+    )
+    chat_eval.add_argument("--model", help="model tag (default: LLM_MODEL)")
+    chat_eval.add_argument("--arm", action="append", choices=CHAT_ARMS,
+                           help="agent or summary; repeat for both (default: agent)")
+    chat_eval.add_argument("--limit", type=int, help="only the first N questions")
+    chat_eval.add_argument("--out", default="eval_results", help="where to write run records")
+
+    summary = subparsers.add_parser(
+        "eval-summary", help="render saved eval run records as markdown tables"
+    )
+    summary.add_argument("records", nargs="+", help="run record JSON files")
+
+    subparsers.add_parser(
+        "mcp", help="serve the read-only query tools to an MCP client over stdio"
+    )
+
     return parser
 
 
@@ -358,6 +625,10 @@ COMMANDS = {
     "patterns": cmd_patterns,
     "report": cmd_report,
     "reset": cmd_reset,
+    "eval": cmd_eval,
+    "eval-chat": cmd_eval_chat,
+    "eval-summary": cmd_eval_summary,
+    "mcp": cmd_mcp,
 }
 
 
