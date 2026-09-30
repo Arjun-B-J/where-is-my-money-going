@@ -83,6 +83,41 @@ basis that two-way flow plus a person-shaped name plus a personal UPI handle is 
 informal loan rather than a merchant. The other **re-checks** every tag the first
 pass was unsure about, and records whether it agreed or overrode.
 
+**Your corrections teach it.** Categorise a payee once and the next payment to the
+same UPI handle takes your label directly. A payee that only looks similar (the same
+landlord paid over IMPS, a new handle) gets your earlier labels as examples, and a
+name check stops `RUSKIN BOSE` inheriting `RUSKIN BOND`'s rent. ([§19](docs/DECISIONS.md#19))
+
+**Chat computes, then checks.** Questions are answered by a tool-calling agent over
+five read-only queries, so the model picks filters and the database does the
+arithmetic. Every rupee figure in the answer is then matched against what the tools
+returned. ([§18](docs/DECISIONS.md#18))
+
+---
+
+## How well it works
+
+Measured rather than asserted. Every figure below comes from `wimmg eval`, and
+[docs/EVALS.md](docs/EVALS.md) has the full tables, the slices, the model digests and
+the limits.
+
+| | Before | Now |
+|---|---|---|
+| Categorising 199 labelled narrations | 52.3% (regex rules) | 91.0% (`gemma4:26b`, on this machine) |
+| Rows trusted without review (confidence 0.70 or more) | | 94.8% of them correct, covering 76.9% of rows |
+| Payees you have categorised before, 34 test rows | 26.5% (model alone) | 88.2% (with your corrections) |
+| Chat questions with a computed answer, 25 of them | 4 correct (fixed summary) | 25 correct (tool-calling agent) |
+
+Five local models were compared on all three suites; `gemma4:26b` stays the default as
+the most accurate at categorising and the fastest per call of the large ones
+([§21](docs/DECISIONS.md#21)). The same bake-off showed why the model runs before the
+regex rules: rules in front help a 3B model and cost the strong models 1.6 to 3.0 points.
+
+The labelled sets are stress sets written for this project, weighted towards what
+breaks classifiers (merchants that appear only under their company name, gateway
+prefixes, refunds), not a sample of anyone's statements. Refunds are the weakest
+slice: the model still gives some money-in rows a spending category.
+
 ---
 
 ## What it finds
@@ -135,6 +170,7 @@ leave it running.
 git clone https://github.com/Arjun-B-J/where-is-my-money-going.git
 cd where-is-my-money-going
 ollama pull gemma4:26b
+ollama pull embeddinggemma    # optional, about 600 MB: lets your corrections teach it
 make install
 ```
 
@@ -186,6 +222,9 @@ wimmg agents     # detect people, re-check weak tags
 wimmg patterns   # print what the detectors found (individuals shown as initials)
 wimmg report     # write the Spend Analysis PDF
 wimmg reset      # delete transactions, keep your rules and notes
+wimmg eval       # score the categoriser against labelled data (docs/EVALS.md)
+wimmg eval-chat  # check chat answers against figures computed from the data
+wimmg mcp        # serve the read-only query tools to an MCP client, people redacted
 ```
 
 ### Statement formats
@@ -247,6 +286,16 @@ model-tagged with zero confidence and wrote invented per-node timings onto a run
 record so screenshots would look complete. It has been deleted with no
 replacement.
 
+**3. Real numbers, wrong answers.** The chat eval's first run got 23 of 25. Both misses
+passed the figure check, because every number in them was real. One tool reported a
+person's balance as `sent` and `received`, and the model read `sent` as money the
+person had sent the user. Another reported a total of zero for a month before the
+first statement, and the model said "you spent nothing" rather than "there is no data
+for that month". Both were the tools' fault, not the model's: the fields now say who
+paid whom, and a period outside the data comes back marked as such. It is §4's lesson
+again, that absence must not look like an answer, this time for a tool result instead
+of a model reply.
+
 ---
 
 ## Project layout
@@ -263,6 +312,10 @@ backend/app/
 ├── llm/
 │   ├── client.py       a failed call never returns content that looks like an answer
 │   └── prompts.py      prompts and JSON schemas; taxonomy defined once
+├── agent/              chat: read-only query tools, the tool-calling loop, the figure check
+├── memory/             learning from your corrections: exact handle first, then similar payees
+├── evals/              labelled data, the scoring, and the runners behind `wimmg eval`
+├── mcp_server.py       the same tools over MCP, JSON-RPC on stdio, people always redacted
 ├── ingest/             deterministic extraction; no model runs in this package
 │   ├── records.py      ParsedTxn + the identity hash that makes re-ingest a no-op
 │   ├── normalize.py    payee-string cleanup shared by every parser
@@ -292,11 +345,15 @@ frontend/
 make check     # lint, types and tests for both sides; same gates as CI
 ```
 
-158 backend tests and 10 frontend tests at the time of writing. The suite runs
+313 backend tests and 10 frontend tests at the time of writing. The suite runs
 without Ollama on purpose: it uses a fake model that can be put into a failure
 state, so the "model unavailable" and "model returned garbage" paths are covered
-rather than skipped. `tests/test_llm_contract.py` and
-`tests/test_quality_gates.py` are regression tests for the two bugs above.
+rather than skipped. `tests/test_llm_contract.py`, `tests/test_quality_gates.py`
+and `tests/test_tool_semantics.py` are regression tests for the three bugs above.
+
+The suite checks that the code behaves; `wimmg eval` checks that the answers are right.
+Those are different questions, and [docs/EVALS.md](docs/EVALS.md) is where the second one
+is answered.
 
 ---
 
@@ -311,6 +368,9 @@ Worth stating plainly, since this is a tool about money.
   extrapolation, not a prediction, and the API says so in its response.
 - **Categories are one model's opinion.** Confidence scores are the model's own
   estimate. The review queue exists because that estimate is not always right.
+- **The accuracy figures come from small, purpose-written test sets.** 199, 34 and 25
+  items, measured on one machine. They are good at showing which approach is better and
+  poor at predicting accuracy on your own statements. See [EVALS.md](docs/EVALS.md).
 - **Anomalies are flags, not findings.** "Two identical charges 40 seconds apart"
   is worth a look. It is not proof of anything.
 - **Three parsers, one bank.** They cover the statements I have. Other banks need

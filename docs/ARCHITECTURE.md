@@ -103,6 +103,36 @@ classifies relationships, and sanity-checks that output before storing it —
 `looks_degenerate()` lives here because model text going into the database is the
 thing that needs guarding.
 
+### `app/memory/` — learning from your corrections
+
+Rows you categorised by hand are read at the start of each tagging run. A new row
+with the same UPI handle as an earlier one takes your label directly, with no model
+call. Anything short of that (a new handle, an IMPS row with no handle, a card payment
+at the same shop) gets your matching labels as examples in the prompt, found by exact
+name and by EmbeddingGemma similarity behind a name check. Vectors are held in memory
+per run, not stored. See [DECISIONS.md §19](DECISIONS.md#19).
+
+### `app/agent/` — chat
+
+Five read-only tools over the transaction table (`data_overview`, `spending_summary`,
+`find_transactions`, `people_balances`, `recurring_payments`), each with a pydantic
+argument model that both validates the call and produces the schema the model sees.
+The loop runs at most five tool rounds, then checks every rupee figure in the answer
+against the numbers the tools returned. See [§18](DECISIONS.md#18).
+
+### `app/evals/` — measuring it
+
+Labelled data, scoring and runners behind `wimmg eval`, `wimmg eval-chat` and
+`wimmg eval-summary`. The runners call the production code paths (`classify_one`,
+`RuleEngine`, the agent loop) against a throwaway in-memory database, never yours.
+Results are in [EVALS.md](EVALS.md).
+
+### `app/mcp_server.py` — the same tools over MCP
+
+JSON-RPC 2.0 on stdio, written without the SDK: `initialize`, `tools/list`,
+`tools/call`, `ping`. Every call runs the agent's tools with people reduced to
+initials. See [§20](DECISIONS.md#20).
+
 ### `app/services/` — analysis
 
 Plain functions over the database. No model, no shared state, no ordering
@@ -193,8 +223,11 @@ to read than the SQL equivalent.
 **`GET /report/spend-analysis`** — gather aggregates, run the model passes
 concurrently, build the PDF in a thread, stream it back.
 
-**`POST /chat/stream`** — server-sent events. On model failure it emits an `error`
-event rather than apologetic prose that reads like an answer.
+**`POST /chat/stream`** — server-sent events. A `tool` event for each query the
+agent runs, then the answer, then `done` carrying whether every figure in it matched a
+tool result. On model failure it emits an `error` event rather than apologetic prose
+that reads like an answer. A model that cannot call tools falls back to the older
+fixed-summary chat, and the `done` event says so.
 
 ---
 
@@ -214,6 +247,11 @@ state. That is what makes the interesting paths testable:
 | `test_rules.py` | Rule matching, priority, taxonomy/database agreement |
 | `test_demo_data.py` | Determinism, calendar correctness, balance coherence |
 | `test_api.py` | Every endpoint, including path traversal and upload validation |
+| `test_evals.py` | The labelled sets load and validate; metrics against hand-computed values; runners abort instead of scoring a model that never ran |
+| `test_memory.py` | Exact handle first, direction respected, the name check, degradation when the embedding model is down, provenance on the row |
+| `test_agent.py` | Tool validation and totals, the step cap, the figure check and its corrective round, the SSE event sequence, the chat eval |
+| `test_tool_semantics.py` | Tool results say who paid whom, and mark a period outside the data instead of reporting zero |
+| `test_mcp.py` | Handshake, listing, calls, redaction, one JSON message per line on stdout |
 
 ---
 

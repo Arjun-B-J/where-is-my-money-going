@@ -394,3 +394,144 @@ when parsing finishes. Filenames are reduced to a sanitised basename first.
 escape the upload directory — the previous version did exactly that. And once the
 rows are extracted, a second copy of the statement on disk is pure liability: it is
 the most sensitive artefact the app touches and nothing needs it again.
+
+---
+
+## 17. Accuracy is measured against labelled data, not inferred from confidence
+
+**Decision.** `wimmg eval` scores the categoriser against `app/evals/data/golden_v1.jsonl`,
+199 labelled Indian bank and card narrations in eight slices, and writes every
+prediction to a JSON record. The results that matter are summarised in
+[EVALS.md](EVALS.md).
+
+**Why.** Until this existed the project could say that every row was categorised and
+that confidence spread out sensibly (§3), but not whether the categories were right.
+Those are different claims, and only the second needs ground truth.
+
+Three choices in the harness carry weight.
+
+* **It runs the production code path.** The eval calls `classify_one` and the seeded
+  `RuleEngine`, and each labelled row goes through the same normaliser a statement
+  parser uses. An eval that exercises a copy of the classifier measures the copy.
+* **It is a stress set, not a sample.** It over-represents what breaks classifiers:
+  merchants that appear only under their registered company name (`BUNDL TECHNOLOGIES`
+  is Swiggy), payment-gateway prefixes, bank codes like `ATW-` for a cash withdrawal,
+  refunds, and payees with no signal at all. So the per-slice numbers matter more than
+  the overall one, and the overall one is not a forecast for anyone's statements.
+* **A model that cannot answer aborts the run.** Scoring an unreachable model would
+  record a 0% that reads as the model being bad at the task, which is §4's mistake in a
+  new place.
+
+It also measures the two things accuracy hides: how often rows above the review
+threshold are right (they are trusted without a human looking) and whether the model
+abstains on opaque payees without abstaining on Swiggy.
+
+**Cost.** The labels are one careful reading of the taxonomy text in `prompts.py`, not
+a panel's consensus. Rows with more than one defensible answer list them all, and a
+prediction scores as correct if it is any of them.
+
+**Would revisit if.** Real corrections from the review queue accumulate. Those are
+labels from the only person who knows what a payment was for, and they would be a
+better test set than anything written in advance.
+
+---
+
+## 18. Chat answers are computed, then checked
+
+**Decision.** Chat is a tool-calling agent over five read-only query tools
+(`app/agent/tools.py`), replacing the fixed summary that could not answer "how much did
+I spend on food in March". Every rupee figure in an answer is then matched against the
+numbers the tools returned.
+
+**Why.** §15 already chose tool-calling over retrieval for chat. The model chooses the
+filters; the tools compute every figure, with totals over all matching rows rather than
+the rows listed, and spending defined exactly as the dashboard defines it.
+
+A rule in a prompt is a request, not a guarantee, so the answer is checked afterwards.
+A precise figure must land within ₹1 or 0.5% of a tool result; a rounded one ("₹1.2
+lakh") within 5%. A figure that matches nothing gets one corrective round, and if it
+still matches nothing the answer is shown with a warning listing it, rather than hidden
+or trusted. The check cannot catch a real figure attached to the wrong thing, which is
+what `wimmg eval-chat` measures, with expected figures computed by separate SQL so a
+tool bug cannot grade itself.
+
+**Cost.** The answer arrives in one piece after the check, because a figure already on
+screen cannot be taken back. A model that cannot call tools gets the old fixed summary,
+labelled as such.
+
+---
+
+## 19. Learning from corrections: two tiers, and a name check the embeddings could not replace
+
+**Decision.** The categories you set by hand now feed back into classification
+(`app/memory/`), the change §15 wanted most.
+
+1. **Same UPI handle, same direction, every earlier label agrees:** your label is
+   applied directly, with no model call. Rows without a handle fall back to the merchant
+   string, but only against earlier rows that had no handle either.
+2. **Anything short of that** (a new handle, the same landlord paid over IMPS, the same
+   shop paid by card) becomes examples in the classifier's prompt, found by exact name
+   and by EmbeddingGemma similarity, and the model decides.
+
+**Why tier 1 exists.** An instruction in a prompt is not a guarantee. On the
+personal-payee eval, a 3B model given an exact same-handle example ignored it half the
+time, and a plain lookup beat it. There is nothing left for a model to judge when the
+handle is identical.
+
+**Why the name check exists.** Measured on the same eval, the embedding model scored
+look-alike strangers (`RUSKIN BOSE` against the stored `RUSKIN BOND`) at 0.93 to 0.97,
+above the same landlord paid over IMPS at 0.83 to 0.87. No similarity threshold
+separates those. So a similar match is offered only if every word of the stored payee's
+name appears in the new row: embeddings find candidates, the name check verifies them,
+which is the usual split in entity resolution.
+
+**Cost.** The name check misses abbreviated names (`KISHORE K` for `KISHORE KUMAR`). The
+eval keeps two such rows so the cost stays visible. Those rows go to the review queue
+instead of inheriting a label, the side this app errs on. Vectors are recomputed per run
+rather than stored, which is fine at a few hundred corrections and would need revisiting
+at several thousand.
+
+**Boundary kept from §15.** Retrieval influences a label, never an amount.
+
+---
+
+## 20. An MCP server that always redacts people, written without the SDK
+
+**Decision.** `wimmg mcp` serves the chat agent's five tools over the Model Context
+Protocol (stdio), so Claude Desktop, an IDE or another agent can query the ledger.
+
+**Why redaction has no off switch.** The in-app chat talks to a model on this machine.
+An MCP client may not: Claude Desktop sends tool results to a cloud model. Every call
+therefore reduces people's names to initials. Amounts, dates and merchant names still
+leave, because no spending question can be answered without them; that boundary is in
+[PRIVACY.md](PRIVACY.md), so connecting a client is a choice made knowingly.
+
+**Why no SDK.** What the server needs is JSON-RPC 2.0 over stdin and stdout, an
+`initialize` handshake, `tools/list` and `tools/call`: about a hundred lines, tested
+over real pipes. A dependency would add supply-chain surface for that, which is the
+reasoning pyproject.toml already applies to every other package.
+
+**Cost.** Protocol features beyond tools (resources, prompts, sampling) are not
+implemented. The server has been exercised with a scripted client over stdio, not yet
+with a desktop client.
+
+---
+
+## 21. The default model is the one the bake-off picked
+
+**Decision.** `gemma4:26b` stays the default, now on evidence rather than habit. Five
+local models were scored on all three suites ([EVALS.md](EVALS.md)); it was the most
+accurate at categorising and, as a mixture-of-experts model with about 4B parameters
+active per token, the fastest per call of everything above 3B. It is also the vision
+model the receipt scanner needs, which a text-only default would not cover.
+
+**What the bake-off also settled.** `LLM_FIRST=true` was a judgement call; it is now a
+measured one. Regex rules in front of the model raised a 3B model from 52.8% to 65.8%
+and cost the three strong models 1.6 to 3.0 points each, because the rules are
+confidently wrong exactly where a strong model is right: Instamart is groceries, not
+food, and a refund is not spending. If the default model ever changes to a small one,
+this is the setting to revisit.
+
+**Would revisit if.** A model scores higher on the categorising suite without losing the
+chat suite, or `qwen3.8:27b`'s precision on auto-accepted rows (97.2%, the highest
+measured) starts to matter more than its 14% false abstentions and 2.7x latency.

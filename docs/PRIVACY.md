@@ -45,11 +45,13 @@ SQLite file. Categorising sends one transaction at a time to a model served by
 Ollama on `localhost:11434`. That is the only outbound call, and it does not leave
 the machine unless you point `LLM_HOST` somewhere else yourself.
 
-**What the model sees.** One transaction's description, amount, direction and
-account, per call. The report's prose and the chat feature get aggregates only:
-totals, top categories, top payees. Chat is deliberately built on the summary
-rather than the raw rows, which means the feature never hands a model a list of
-everyone you have paid.
+**What the model sees.** Categorising sends one transaction's description, amount,
+direction and account per call, plus, when you have categorised the same or a
+similar payee before, a few of those earlier rows as examples. The report's prose
+gets aggregates only. Chat queries the database through five read-only tools and
+passes the results to the model, which can include individual rows (payee, date,
+amount) when a question needs them. All of this goes to the model on your machine;
+the embedding model used for learning from corrections is local too.
 
 **Uploads are not retained.** `POST /ingest/file` parses from a temporary
 directory that is deleted as soon as the rows are extracted. The transactions are
@@ -69,6 +71,14 @@ in your database, not in source:
   `backend/app/reports/labels.py`.
 - The seed data creates no people at all. People are discovered from your
   transactions by `app.services.friend_detector`.
+
+**The one deliberate way out: `wimmg mcp`.** The MCP server lets a client such as
+Claude Desktop query your ledger, and such a client may send what it receives to a
+cloud model. So every MCP call reduces people's names to initials, with no switch to
+turn that off. Amounts, dates, categories and merchant names are still returned,
+because no spending question can be answered without them. Nothing is served unless
+you start the server and connect a client yourself; treat doing so as sharing that
+view of your data with whichever model the client uses.
 
 **No telemetry.** No analytics SDK, no error reporting, no external fonts, no CDN.
 The frontend sets `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer`.
@@ -92,8 +102,9 @@ ledger.
 
 | Check | What it catches |
 |---|---|
-| No Indian mobile numbers in source | `9xxxxxxxxx` patterns. The demo dataset's unassignable `90000 000xx` range is allowlisted |
-| No real UPI handles in source | `@oksbi`, `@okicici`, `@ybl`, `@paytm` and friends. Demo data uses `@okbank`, which is not a real handle |
+| No Indian mobile numbers in source | `9xxxxxxxxx` patterns, in Python source and in the labelled eval data (`app/evals/data/*.jsonl`). The demo dataset's unassignable `90000 000xx` range is allowlisted |
+| No real UPI handles in source | `@oksbi`, `@okicici`, `@ybl`, `@paytm` and friends, in source and eval data. Demo and eval data use `@okbank`, which is not a real handle |
+| MCP output is redacted | `tests/test_mcp.py` asserts a person's name never appears in a tool result served over MCP |
 | No employer identifiers | Payroll descriptors and employer names |
 | Seeded rules name no individuals | A default rule may not carry a `person_name` |
 | Seeded payee notes are structural | Allowlisted to transaction *types* (`SALARY`, `ATM`, `RENT`), never a specific payee |
