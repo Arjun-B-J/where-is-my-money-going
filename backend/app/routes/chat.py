@@ -1,109 +1,88 @@
 """Chat over your own spending.
 
-The model is given an aggregate summary, not the transaction table. That keeps
-the prompt small, but the real reason is that a question like "how much did I
-spend on food" is answered from totals anyway — and handing a model 900 raw rows
-including every payee's name is more exposure than the feature needs.
+The work happens in `app.agent`: the model chooses queries, the tools compute
+every figure, and each answer is checked for figures that nothing computed
+before it is sent (DECISIONS.md §15). This module turns that into two endpoints
+and keeps one rule of its own: a failure is sent as an error, never as prose
+that could be mistaken for an answer.
+
+The answer arrives as one chunk rather than token by token. It cannot be shown
+until its figures have been checked, and a figure already on screen cannot be
+taken back. The tool events stream as the queries run, so the wait is visible.
 """
 from __future__ import annotations
 
 import json
 import logging
-from collections import defaultdict
+from collections.abc import AsyncIterator
+from typing import Any
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.agent.loop import ToolStep, answer, stream_answer
 from app.db import get_db
-from app.llm.client import LLMUnavailableError, get_llm
-from app.llm.prompts import CHAT_SYSTEM
-from app.models import Person, Transaction, TxnDirection
-from app.money import rupees
+from app.llm.client import get_llm
 from app.schemas import ChatRequest
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-_TOP_N = 8
+MODEL_UNREACHABLE = "The local model is not reachable."
+UNEXPECTED_FAILURE = "Something went wrong while answering. The backend log has the details."
 
 
-def _summary_for_prompt(db: Session) -> str:
-    """A compact, factual snapshot of the user's data."""
-    txns = db.query(Transaction).filter(Transaction.is_duplicate.is_(False)).all()
-    if not txns:
-        return "The user has not ingested any transactions yet."
+def _history(request: ChatRequest) -> list[dict[str, str]]:
+    """The conversation, without any system message the client sent.
 
-    spent = sum(t.amount for t in txns if t.direction == TxnDirection.DEBIT)
-    received = sum(t.amount for t in txns if t.direction == TxnDirection.CREDIT)
-
-    categories: dict[str, float] = defaultdict(float)
-    payees: dict[str, float] = defaultdict(float)
-    for txn in txns:
-        if txn.direction != TxnDirection.DEBIT:
-            continue
-        categories[txn.category or "uncategorized"] += txn.amount
-        payees[(txn.merchant_normalized or txn.raw_description)[:40]] += txn.amount
-
-    def top(values: dict[str, float]) -> str:
-        ranked = sorted(values.items(), key=lambda kv: -kv[1])[:_TOP_N]
-        return "\n".join(f"  - {name}: {rupees(total)}" for name, total in ranked) or "  (none)"
-
-    people_lines: list[str] = []
-    for person in db.query(Person).all():
-        rows = db.query(Transaction).filter(Transaction.person_id == person.id).all()
-        if not rows:
-            continue
-        net = sum(
-            row.amount if row.direction == TxnDirection.DEBIT else -row.amount
-            for row in rows
-        )
-        side = "they are behind" if net > 0 else "the user is behind"
-        people_lines.append(f"  - {person.name}: {rupees(abs(net))}, {side}")
-
-    period = f"{min(t.posted_at for t in txns):%b %Y} to {max(t.posted_at for t in txns):%b %Y}"
-    return f"""DATA SUMMARY ({len(txns)} transactions, {period})
-Total spent: {rupees(spent)}
-Total received: {rupees(received)}
-Net: {rupees(received - spent)}
-
-Spending by category:
-{top(categories)}
-
-Largest payees:
-{top(payees)}
-
-People:
-{chr(10).join(people_lines) or "  (none tracked)"}"""
-
-
-def _messages(db: Session, request: ChatRequest) -> list[dict]:
+    The server's system prompt carries the rules that keep figures honest, and
+    a client-supplied one could countermand them.
+    """
     return [
-        {"role": "system", "content": f"{CHAT_SYSTEM}\n\n{_summary_for_prompt(db)}"},
-        *({"role": m.role, "content": m.content} for m in request.messages),
+        {"role": message.role, "content": message.content}
+        for message in request.messages if message.role != "system"
     ]
+
+
+def _event(payload: dict[str, Any]) -> str:
+    return f"data: {json.dumps(payload)}\n\n"
 
 
 @router.post("/stream")
 async def chat_stream(
     request: ChatRequest, db: Session = Depends(get_db)
 ) -> StreamingResponse:
-    """Server-sent events: `{"delta": "..."}` chunks, then `{"done": true}`.
+    """Server-sent events, in this order:
 
-    A model failure emits an `error` event. It does not emit apologetic prose
-    pretending to be an answer.
+    * `{"tool": {"name", "args", "ok"}}` as each query runs
+    * `{"delta": "..."}` with the checked answer
+    * `{"done": true, "grounded": bool, "ungrounded": [...], "mode": "agent" | "summary"}`
+
+    A failure sends one `{"error": ...}` in place of the last two.
     """
     llm = get_llm()
-    messages = _messages(db, request)
+    history = _history(request)
 
-    async def events():
+    async def events() -> AsyncIterator[str]:
         try:
-            async for chunk in llm.stream(messages, temperature=0.4):
-                yield f"data: {json.dumps({'delta': chunk})}\n\n"
-            yield f"data: {json.dumps({'done': True})}\n\n"
-        except LLMUnavailableError as e:
-            logger.warning("Chat stream failed: %s", e)
-            yield f"data: {json.dumps({'error': 'The local model is not reachable.'})}\n\n"
+            async for item in stream_answer(llm, db, history):
+                if isinstance(item, ToolStep):
+                    yield _event({"tool": {"name": item.tool, "args": item.args, "ok": item.ok}})
+                elif item.ok:
+                    yield _event({"delta": item.text})
+                    yield _event({
+                        "done": True, "grounded": item.grounded,
+                        "ungrounded": item.ungrounded, "mode": item.mode,
+                    })
+                else:
+                    logger.warning("Chat failed: %s", item.error)
+                    yield _event({"error": MODEL_UNREACHABLE})
+        except Exception:
+            # Headers have gone out by now, so a 500 is no longer possible. An
+            # error event is the only way left to say that this is not an answer.
+            logger.exception("Chat stream failed")
+            yield _event({"error": UNEXPECTED_FAILURE})
 
     return StreamingResponse(
         events(),
@@ -113,9 +92,17 @@ async def chat_stream(
 
 
 @router.post("")
-async def chat(request: ChatRequest, db: Session = Depends(get_db)) -> dict:
-    """Non-streaming variant."""
-    result = await get_llm().complete(_messages(db, request), temperature=0.4)
-    if result.failed:
-        return {"ok": False, "error": "The local model is not reachable.", "reply": None}
-    return {"ok": True, "reply": result.text, "error": None}
+async def chat(request: ChatRequest, db: Session = Depends(get_db)) -> dict[str, Any]:
+    """Non-streaming variant, with the same checks and the full trace."""
+    result = await answer(get_llm(), db, _history(request))
+    if not result.ok:
+        logger.warning("Chat failed: %s", result.error)
+    return {
+        "ok": result.ok,
+        "reply": result.text if result.ok else None,
+        "error": None if result.ok else MODEL_UNREACHABLE,
+        "grounded": result.grounded,
+        "ungrounded": result.ungrounded,
+        "mode": result.mode,
+        "trace": result.trace,
+    }

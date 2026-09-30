@@ -140,7 +140,7 @@ export interface Transaction {
   category: string | null;
   subcategory: string | null;
   /** null means nothing has categorised this row — not a failed model call. */
-  tag_source: "rule" | "llm" | "validator" | "user" | null;
+  tag_source: "rule" | "llm" | "validator" | "user" | "memory" | null;
   tag_confidence: number | null;
   tag_reason: string | null;
   person_id: number | null;
@@ -245,6 +245,43 @@ export interface ReceiptScanResult {
   transaction: Transaction | null;
 }
 
+/** One query the chat agent ran. `ok` is false when the tool rejected its arguments. */
+export interface ChatToolStep {
+  name: string;
+  args: Record<string, unknown>;
+  ok: boolean;
+}
+
+/**
+ * How an answer was produced: by queries over the data ("agent"), or from the
+ * fixed summary a model without tool support gets instead ("summary").
+ */
+export type ChatMode = "agent" | "summary";
+
+/** Server-sent events from POST /chat/stream, in the order they arrive. Mirrors app/routes/chat.py. */
+export type ChatStreamEvent =
+  | { tool: ChatToolStep }
+  | { delta: string }
+  | {
+      done: true;
+      /** False when a figure in the answer matched nothing the queries returned. */
+      grounded: boolean;
+      ungrounded: string[];
+      mode: ChatMode;
+    }
+  | { error: string };
+
+export interface ChatReply {
+  /** False means there is no answer; `reply` is null and `error` says why. */
+  ok: boolean;
+  reply: string | null;
+  error: string | null;
+  grounded: boolean;
+  ungrounded: string[];
+  mode: ChatMode;
+  trace: { tool: string; args: Record<string, unknown>; ok: boolean; ms: number }[];
+}
+
 export interface TransactionFilters {
   limit?: number;
   offset?: number;
@@ -321,9 +358,7 @@ export const api = {
   },
 
   chat: (messages: { role: string; content: string }[]) =>
-    send<{ ok: boolean; reply: string | null; error: string | null }>("POST", "/chat", {
-      messages,
-    }),
+    send<ChatReply>("POST", "/chat", { messages }),
   chatStreamUrl: () => `${BASE}/chat/stream`,
 
   reportUrl: () => `${BASE}/report/spend-analysis`,
