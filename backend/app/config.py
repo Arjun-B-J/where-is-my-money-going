@@ -37,6 +37,22 @@ class Settings(BaseSettings):
     # 4 keeps a single consumer GPU busy without thrashing its memory.
     llm_concurrency: int = 4
 
+    # ---- Learning from corrections ----
+    # Rows you have categorised by hand are shown to the classifier as examples
+    # when it meets the same or a similar payee. The embedding model is small
+    # (about 600 MB) and only ever influences a label, never an amount.
+    memory_enabled: bool = True
+    embed_model: str = "embeddinggemma"
+    memory_top_k: int = 4
+    # Cosine similarity below which a past label is not offered as an example.
+    # Tuned on the personal-payee eval (docs/EVALS.md); lower lets look-alike
+    # names through, higher misses the same payee paid over a different rail.
+    memory_min_similarity: float = 0.80
+    # Similar (not exact) matches must also share the payee's name, because the
+    # embedding model scores look-alike strangers above the same person paid
+    # over a different rail. See app/memory/store.py.
+    memory_name_check: bool = True
+
     # ---- Storage ----
     database_url: str = "sqlite:///./storage/wimmg.db"
 

@@ -61,6 +61,7 @@ class TagSource(enum.StrEnum):
     LLM = "llm"          # local model, first pass
     VALIDATOR = "validator"  # local model, second-opinion pass overrode the first
     USER = "user"        # a human set it
+    MEMORY = "memory"    # a human set it on an earlier row with the same UPI handle
 
 
 class Transaction(Base):

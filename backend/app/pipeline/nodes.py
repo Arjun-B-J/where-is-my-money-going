@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal, TypedDict
 
@@ -20,7 +21,14 @@ from app.demo.generator import generate_transactions
 from app.ingest.loader import load_directory, load_transactions
 from app.ingest.records import ParsedTxn
 from app.llm.client import LLMClient
-from app.llm.prompts import TAGGING_SCHEMA, TAGGING_SYSTEM, TAGGING_USER
+from app.llm.prompts import (
+    TAGGING_MEMORY,
+    TAGGING_MEMORY_LINE,
+    TAGGING_SCHEMA,
+    TAGGING_SYSTEM,
+    TAGGING_USER,
+)
+from app.memory import CorrectionMemory, Match
 from app.models import PipelineRun, TagSource, Transaction
 from app.rules.engine import RuleEngine
 from app.seed import seed_all
@@ -44,6 +52,10 @@ class PipelineState(TypedDict, total=False):
     rule_tagged: int
     llm_tagged: int
     needs_review: int
+    # Rows that took the user's own earlier label for the same UPI handle
+    # directly, and rows classified with such labels as examples (app.memory).
+    memory_decided: int
+    memory_assisted: int
 
     # Set False when any classification call failed. The run is then explicit
     # that some rows are untagged rather than pretending they were classified.
@@ -166,12 +178,31 @@ def node_rule_tag(state: PipelineState, db: Session) -> PipelineState:
     return {"rule_tagged": tagged, "timings_ms": _with_timing(state, "rule_tag", started)}
 
 
-async def classify_one(txn: Transaction, llm: LLMClient) -> dict | None:
+def _memory_block(examples: Sequence[Match]) -> str:
+    lines = [
+        TAGGING_MEMORY_LINE.format(
+            description=match.example.description[:120],
+            direction=match.example.direction,
+            amount=f"{match.example.amount:,.0f}",
+            same={"handle": ", same UPI handle", "name": ", same name"}.get(match.via, ""),
+            category=match.example.category,
+        )
+        for match in examples
+    ]
+    return TAGGING_MEMORY.format(examples="\n".join(lines))
+
+
+async def classify_one(
+    txn: Transaction, llm: LLMClient, examples: Sequence[Match] | None = None
+) -> dict | None:
     """Classify one transaction.
 
     Returns the parsed fields, or **None** when the model could not be reached
     or returned something unusable. None means "no answer" and callers must not
     write a tag — that distinction is the whole point. See `app.llm.client`.
+
+    `examples` are the user's own earlier decisions for this or a similar payee
+    (app.memory). The model is told to use them only for the same payee.
     """
     prompt = TAGGING_USER.format(
         description=txn.raw_description[:300],
@@ -181,6 +212,8 @@ async def classify_one(txn: Transaction, llm: LLMClient) -> dict | None:
         source=txn.source.value,
         counterparty=txn.counterparty_id or "(none)",
     )
+    if examples:
+        prompt += _memory_block(examples)
     result = await llm.structured(
         [
             {"role": "system", "content": TAGGING_SYSTEM},
@@ -235,11 +268,59 @@ async def node_llm_tag(state: PipelineState, db: Session, llm: LLMClient) -> Pip
             "timings_ms": _with_timing(state, "llm_tag", started),
         }
 
-    semaphore = asyncio.Semaphore(settings.llm_concurrency)
+    memory: CorrectionMemory | None = None
+    if settings.memory_enabled:
+        memory = await CorrectionMemory.from_db(
+            db, llm, top_k=settings.memory_top_k,
+            min_similarity=settings.memory_min_similarity,
+            name_check=settings.memory_name_check,
+        )
+        if not memory.examples:
+            memory = None
 
-    async def classify(txn: Transaction) -> tuple[Transaction, dict | None]:
+    # Tier 1: a payee you have already categorised, under the same UPI handle,
+    # gets your label directly. There is nothing for a model to judge, and on
+    # the personal-payee eval a small model ignored such examples half the time.
+    decided = 0
+    if memory is not None:
+        undecided = []
+        for txn in pending:
+            earlier = memory.decide(
+                txn.direction.value,
+                counterparty=txn.counterparty_id, merchant=txn.merchant_normalized,
+            )
+            if earlier is None:
+                undecided.append(txn)
+                continue
+            txn.category = earlier.category
+            txn.subcategory = None
+            txn.tag_source = TagSource.MEMORY
+            txn.tag_confidence = 1.0
+            txn.tag_reason = "your earlier label for this payee"
+            txn.needs_review = False
+            decided += 1
+        db.commit()
+        pending = undecided
+        await memory.prepare((t.raw_description, t.direction.value) for t in pending)
+        if decided:
+            logger.info("%d rows took your earlier label for the same payee", decided)
+    if not pending:
+        return {
+            "llm_tagged": 0, "needs_review": 0, "llm_failed": 0, "llm_available": True,
+            "memory_decided": decided, "memory_assisted": 0,
+            "timings_ms": _with_timing(state, "llm_tag", started),
+        }
+
+    semaphore = asyncio.Semaphore(settings.llm_concurrency)
+    assisted = 0
+
+    async def classify(txn: Transaction) -> tuple[Transaction, dict | None, bool]:
+        examples = memory.lookup(
+            txn.raw_description, txn.direction.value,
+            counterparty=txn.counterparty_id, merchant=txn.merchant_normalized,
+        ) if memory else []
         async with semaphore:
-            return txn, await classify_one(txn, llm)
+            return txn, await classify_one(txn, llm, examples), bool(examples)
 
     tagged = flagged = failed = 0
     # Commit in chunks so a long run over a real statement history keeps its
@@ -247,7 +328,7 @@ async def node_llm_tag(state: PipelineState, db: Session, llm: LLMClient) -> Pip
     chunk_size = 50
     for start in range(0, len(pending), chunk_size):
         chunk = pending[start:start + chunk_size]
-        for txn, fields in await asyncio.gather(*(classify(t) for t in chunk)):
+        for txn, fields, used_memory in await asyncio.gather(*(classify(t) for t in chunk)):
             if fields is None:
                 failed += 1
                 txn.needs_review = True
@@ -258,9 +339,15 @@ async def node_llm_tag(state: PipelineState, db: Session, llm: LLMClient) -> Pip
             txn.subcategory = fields["subcategory"]
             txn.tag_source = TagSource.LLM
             txn.tag_confidence = fields["confidence"]
-            txn.tag_reason = fields["reason"]
+            # Provenance: say when your own earlier labels were in the prompt,
+            # so a tag that copied one is never mistaken for independent judgement.
+            txn.tag_reason = (
+                f"{fields['reason']} · used your earlier labels" if used_memory
+                else fields["reason"]
+            )
             txn.needs_review = fields["confidence"] < settings.confidence_threshold
             tagged += 1
+            assisted += int(used_memory)
             flagged += int(txn.needs_review)
         db.commit()
         logger.info("Classified %d/%d", min(start + chunk_size, len(pending)), len(pending))
@@ -272,11 +359,16 @@ async def node_llm_tag(state: PipelineState, db: Session, llm: LLMClient) -> Pip
             failed, len(pending),
         )
 
+    if assisted:
+        logger.info("%d rows were classified with your earlier labels as examples", assisted)
+
     return {
         "llm_tagged": tagged,
         "needs_review": flagged + failed,
         "llm_failed": failed,
         "llm_available": failed == 0,
+        "memory_decided": decided,
+        "memory_assisted": assisted,
         "timings_ms": _with_timing(state, "llm_tag", started),
     }
 

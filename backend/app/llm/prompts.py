@@ -77,6 +77,19 @@ direction: {direction}
 source: {source}
 counterparty: {counterparty}"""
 
+# Appended to TAGGING_USER when the account holder has categorised the same or a
+# similar payee before (app.memory). The instruction matters as much as the
+# examples: a similar name is not the same payee, and without it a model copies
+# the landlord's label onto anyone called Ruskin.
+TAGGING_MEMORY = """
+
+The account holder categorised these earlier transactions themselves. Use one \
+only if this transaction is clearly the same payee: the same UPI handle, or the \
+same name paid for the same thing. A similar name alone is not enough.
+{examples}"""
+
+TAGGING_MEMORY_LINE = '- "{description}" ({direction}, Rs {amount}{same}): {category}'
+
 
 # ---------------------------------------------------------------------------
 # Validator agent — second opinion on low-confidence tags
