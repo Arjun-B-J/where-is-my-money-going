@@ -33,7 +33,7 @@ import json
 import logging
 import time
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -86,6 +86,27 @@ class LLMResult:
         return parsed if isinstance(parsed, dict) else None
 
 
+@dataclass(frozen=True)
+class ToolTurn:
+    """One assistant turn from a call that offered tools.
+
+    Either the model asked for tools (`tool_calls` non-empty), or it answered
+    (`content` non-empty), or the call failed (`ok=False`, both empty). A turn
+    with neither content nor tool calls is a failure, for the same reason an
+    empty completion is.
+    """
+
+    ok: bool
+    content: str = ""
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    error: str | None = None
+    duration_ms: int = 0
+
+    @property
+    def failed(self) -> bool:
+        return not self.ok
+
+
 class LLMClient:
     """Thin async wrapper over the Ollama chat API."""
 
@@ -96,13 +117,19 @@ class LLMClient:
         vision_model: str | None = None,
         timeout: float | None = None,
         think: bool | None = None,
+        embed_model: str | None = None,
     ) -> None:
         s = get_settings()
         self.host = (host or s.llm_host).rstrip("/")
         self.model = model or s.llm_model
         self.vision_model = vision_model or s.llm_vision_model
+        self.embed_model = embed_model or s.embed_model
         self.timeout = timeout or s.llm_timeout_s
         self.think = s.llm_think if think is None else think
+        # Models that answered HTTP 400 to the `think` field. Some non-reasoning
+        # models reject it outright rather than ignoring it; for those the field
+        # is dropped, which is what `think=false` was asking for anyway.
+        self._rejects_think: set[str] = set()
 
     # ---------- health ----------
 
@@ -197,6 +224,62 @@ class LLMClient:
             payload["format"] = schema
         return await self._post(payload)
 
+    async def embed(self, texts: list[str], *, model: str | None = None) -> list[list[float]] | None:
+        """One embedding vector per text, in order, or None when the call failed.
+
+        None rather than zero vectors: a zero vector has no direction, so every
+        similarity computed against it would be meaningless yet still produce a
+        number, and a number looks like an answer.
+        """
+        if not texts:
+            return []
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                r = await client.post(
+                    f"{self.host}/api/embed",
+                    json={"model": model or self.embed_model, "input": texts, "truncate": True},
+                )
+                r.raise_for_status()
+            vectors = r.json().get("embeddings") or []
+        except (httpx.HTTPError, ValueError) as e:
+            logger.warning("Embedding call failed: %s", e)
+            return None
+        if len(vectors) != len(texts):
+            logger.warning("Embedding call returned %d vectors for %d texts", len(vectors), len(texts))
+            return None
+        return vectors
+
+    async def with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        *,
+        model: str | None = None,
+        temperature: float = 0.1,
+    ) -> ToolTurn:
+        """One turn of a tool-calling conversation.
+
+        `tools` uses Ollama's function-calling shape. The caller runs any
+        requested tools and calls again with their results appended; this method
+        never executes anything itself.
+        """
+        message, error, elapsed = await self._request({
+            "model": model or self.model,
+            "messages": messages,
+            "stream": False,
+            "think": self.think,
+            "tools": tools,
+            "options": {"temperature": temperature},
+        })
+        if message is None:
+            return ToolTurn(ok=False, error=error, duration_ms=elapsed)
+        content = (message.get("content") or "").strip()
+        calls = [c for c in (message.get("tool_calls") or []) if isinstance(c, dict)]
+        if not content and not calls:
+            return ToolTurn(ok=False, error="model returned neither text nor a tool call",
+                            duration_ms=elapsed)
+        return ToolTurn(ok=True, content=content, tool_calls=calls, duration_ms=elapsed)
+
     async def stream(
         self,
         messages: list[dict[str, Any]],
@@ -241,24 +324,43 @@ class LLMClient:
     # ---------- transport ----------
 
     async def _post(self, payload: dict[str, Any], *, max_retries: int = 3) -> LLMResult:
-        """POST to /api/chat with exponential backoff on transient failures."""
+        """POST to /api/chat and return the reply text, or an explicit failure."""
+        message, error, elapsed = await self._request(payload, max_retries=max_retries)
+        if message is None:
+            return LLMResult(text="", ok=False, error=error, duration_ms=elapsed)
+        # `content` excludes the model's `thinking` channel, which is what we
+        # want even when thinking is enabled.
+        text = (message.get("content") or "").strip()
+        return LLMResult(
+            text=text,
+            ok=bool(text),
+            error=None if text else "model returned empty content",
+            duration_ms=elapsed,
+        )
+
+    async def _request(
+        self, payload: dict[str, Any], *, max_retries: int = 3
+    ) -> tuple[dict[str, Any] | None, str | None, int]:
+        """POST to /api/chat with exponential backoff on transient failures.
+
+        Returns `(message, None, ms)` on success and `(None, error, ms)` on
+        failure. Never raises.
+        """
         t0 = time.perf_counter()
         last_error = "unknown error"
+        if payload.get("model") in self._rejects_think:
+            payload = {k: v for k, v in payload.items() if k != "think"}
+
+        def elapsed() -> int:
+            return int((time.perf_counter() - t0) * 1000)
 
         for attempt in range(max_retries):
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     r = await client.post(f"{self.host}/api/chat", json=payload)
                     r.raise_for_status()
-                # `content` excludes the model's `thinking` channel, which is
-                # what we want even when thinking is enabled.
-                text = r.json().get("message", {}).get("content", "") or ""
-                return LLMResult(
-                    text=text.strip(),
-                    ok=bool(text.strip()),
-                    error=None if text.strip() else "model returned empty content",
-                    duration_ms=int((time.perf_counter() - t0) * 1000),
-                )
+                message = r.json().get("message")
+                return (message if isinstance(message, dict) else {}), None, elapsed()
             except _RETRYABLE as e:
                 last_error = f"{type(e).__name__}: {e}"
                 if attempt < max_retries - 1:
@@ -270,8 +372,16 @@ class LLMClient:
                     await asyncio.sleep(backoff)
             except httpx.HTTPStatusError as e:
                 last_error = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
-                is_server_error = 500 <= e.response.status_code < 600
-                if is_server_error and attempt < max_retries - 1:
+                status = e.response.status_code
+                if status == 400 and "think" in payload and "think" in e.response.text.lower():
+                    # Not a retry of the same request: the field this model
+                    # rejects is removed, once, and remembered for later calls.
+                    self._rejects_think.add(str(payload.get("model")))
+                    payload = {k: v for k, v in payload.items() if k != "think"}
+                    logger.info("%s rejects the think field; sending without it",
+                                payload.get("model"))
+                    continue
+                if 500 <= status < 600 and attempt < max_retries - 1:
                     await asyncio.sleep(1.5**attempt)
                 else:
                     break
@@ -280,12 +390,7 @@ class LLMClient:
                 break
 
         logger.warning("LLM call failed after %d attempt(s): %s", max_retries, last_error)
-        return LLMResult(
-            text="",
-            ok=False,
-            error=last_error,
-            duration_ms=int((time.perf_counter() - t0) * 1000),
-        )
+        return None, last_error, elapsed()
 
 
 _client: LLMClient | None = None
